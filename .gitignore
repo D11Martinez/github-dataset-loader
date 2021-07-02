@@ -1,3 +1,6 @@
+# env
+*.env
+
 # compiled output
 /dist
 /node_modules
@@ -9,6 +12,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+
+*-lock.json
 
 # OS
 .DS_Store
