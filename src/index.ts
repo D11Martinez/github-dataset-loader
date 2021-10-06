@@ -27,9 +27,11 @@ if (isMainThread) {
       });
     });
   } else {
-    console.error(
-      'El dia de finalización debe ser mayor al dia de inicio y el dia de inicio debe ser mayor a cero y menor o igual a 31',
-    );
+    const errorMsg1 = 'El dia de finalización debe ser mayor al dia de inicio.';
+    const errorMsg2 =
+      'El dia de inicio debe ser mayor a cero y menor o igual a 31.';
+
+    console.error(`${errorMsg1}\n${errorMsg2}`);
   }
 } else {
   const filenameWithDay = workerData;
