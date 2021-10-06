@@ -1,4 +1,5 @@
 # Descripción
+
 Programa para descargar y filtrar eventos de Github alojados en GHArchive. Estos son almacenados por día en una carpeta especifica.
 https://data.gharchive.org
 
@@ -16,6 +17,7 @@ https://data.gharchive.org
 Primero debe configurar sus variables de entorno en el archivo .env
 
 `$ npm run build`
+
 `$ npm run start:prod`
 
 Espere mientras los archivos son descargados.
