@@ -1,20 +1,44 @@
 import * as dotEnv from 'dotenv';
-import { connect, disconnect } from 'mongoose';
 import { EventsService } from './services/events.service';
+import { Worker, workerData, isMainThread } from 'worker_threads';
 
 dotEnv.config();
 
-async function main() {
-  // Db connection
-  await connect(process.env.MONGO_DB_URL);
-  console.log('Conexión a MongoDB establecida');
+if (isMainThread) {
+  const year = process.env.YEAR;
+  const month = process.env.MONTH;
+  const startDay = Number(process.env.START_DAY);
+  const endDay = Number(process.env.END_DAY);
+  const diffDays = endDay - startDay;
 
-  const eventService = new EventsService();
+  if (diffDays > 0 && startDay > 0 && startDay <= 31) {
+    const filenameWithDays = Array.from(Array(diffDays + 1).keys()).map(
+      (counter) => {
+        const day = startDay + counter;
+        const cleanDay = day < 10 ? `0${day}` : `${day}`;
 
-  await eventService.loadEvents();
+        return `${year}-${month}-${cleanDay}`;
+      },
+    );
 
-  await disconnect();
-  console.log('Conexión a MongoDB finalizada');
+    filenameWithDays.forEach((filenameWithDay) => {
+      new Worker(__filename, {
+        workerData: filenameWithDay,
+      });
+    });
+  } else {
+    console.error(
+      'El dia de finalización debe ser mayor al dia de inicio y el dia de inicio debe ser mayor a cero y menor o igual a 31',
+    );
+  }
+} else {
+  const filenameWithDay = workerData;
+
+  async function main() {
+    const eventService = new EventsService();
+
+    await eventService.loadEvents(filenameWithDay);
+  }
+
+  main().catch((err) => console.log(err));
 }
-
-main().catch((err) => console.log(err));

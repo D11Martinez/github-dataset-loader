@@ -1,17 +1,34 @@
-import { EventRepository } from '../repositories/event.repository';
-import axios from 'axios';
+import Axios from 'axios';
+import { Readable } from 'stream';
 import * as zlib from 'zlib';
+import { eventType, requestTimeout } from '../common/constants';
+import { appendFile } from 'fs';
 
 export class EventsService {
-  findFilesByDay(currentDate: String) {
+  private findFilesByMonth(year: String, month: String): string[] {
+    const filenameWithDays = Array.from(Array(31).keys()).map((counter) => {
+      const day = counter + 1;
+      const cleanDay = day < 10 ? `0${day}` : `${day}`;
+
+      return `${year}-${month}-${cleanDay}`;
+    });
+
+    const filenamesWithHours = filenameWithDays
+      .map((filenameWithDay) => this.findFilesByDay(filenameWithDay))
+      .reduce((acc, filenameWithHour) => acc.concat(filenameWithHour), []);
+
+    return filenamesWithHours;
+  }
+
+  private findFilesByDay(filenameWithDay: String) {
     const filenamesWithHours = Array.from(Array(23).keys()).map((hour) => {
-      return `${currentDate}-${hour}`;
+      return `${filenameWithDay}-${hour}`;
     });
 
     return filenamesWithHours;
   }
 
-  filterEventsByType(rawData: string | null, eventType: string) {
+  private filterEventsByType(rawData: string | null, eventType: string) {
     if (!rawData) return [];
 
     const filteredEvents = rawData
@@ -23,40 +40,82 @@ export class EventsService {
     return filteredEvents;
   }
 
-  async fetchData(filename: string): Promise<string> {
+  private async fetchData(filename: string): Promise<string> {
     const apiUrl = process.env.GITHUB_URL_API;
+
     const url = `${apiUrl}/${filename}.json.gz`;
 
-    const { data: rawData } = await axios.get(url, {
-      responseType: 'arraybuffer',
-    });
-
-    return await new Promise(async (resolve) => {
-      zlib.gunzip(rawData, function (err, buffer) {
-        if (err)
-          console.error(
-            `-- ${new Date().toISOString()} --filename = ${filename} || --message = Hubo un problema al cargar la data`,
-          );
-
-        resolve(buffer.toString());
+    try {
+      const response = await Axios.get(url, {
+        responseType: 'stream',
+        timeout: requestTimeout,
       });
-    });
+
+      const dataStream: Readable = response.data;
+
+      return await new Promise(async (resolve, reject) => {
+        let dataBufferArr = [];
+
+        dataStream.on('data', (chunk) => {
+          dataBufferArr.push(chunk);
+        });
+
+        dataStream.on('end', () => {
+          const rawData = Buffer.concat(dataBufferArr);
+
+          zlib.gunzip(rawData, function (err, buffer) {
+            if (err)
+              console.error(
+                `-- ${new Date().toISOString()} --filename = ${filename} || --message = Hubo un problema al cargar la data`,
+              );
+
+            resolve(buffer.toString());
+          });
+        });
+
+        dataStream.on('error', (fooErr) => console.error(fooErr.message));
+      });
+    } catch (error) {
+      console.error(error.message);
+    }
   }
 
-  async getFilteredEvents(filename: string, eventType: string) {
+  private async getFilteredEvents(filename: string, eventType: string) {
     const data = await this.fetchData(filename);
+
+    if (!data) return;
+
     const filteredData = this.filterEventsByType(data, eventType);
 
     return filteredData;
   }
 
-  async loadEvents(): Promise<any> {
-    const eventType = 'PullRequestEvent';
-    const filename = '2015-01-01';
-    const message = `saving data of ${filename}`;
+  private async writeLog(filename: string, success: boolean) {
+    const message = success ? 'Archivo procesado' : 'Archivo no encontrado';
+    const content = `{ "date": ${new Date().toISOString()}, "filename" : ${filename}, "message" : ${message} }`;
 
-    const filenamesWithHours = this.findFilesByDay(filename);
-    const eventRepository = new EventRepository();
+    //appendFile(logsFilename, `${content}\n`, (err) => {});
+
+    if (success) console.info(content);
+    else console.error(content);
+  }
+
+  private saveDataInFile(filename: string, data: any[]) {
+    const finalFilesDirectory = process.env.FINAL_FILES_DIR || './data';
+    const filePath = `${finalFilesDirectory}/${filename}.json`;
+
+    const formatedDataWithNextLine = data.reduce((acc, item) => {
+      const itemString = JSON.stringify(item);
+      return `${acc}\n${itemString}`;
+    }, '');
+
+    const jsonData = formatedDataWithNextLine.slice(1);
+
+    appendFile(filePath, `${jsonData}\n`, 'utf8', (err) => {});
+  }
+
+  async loadEvents(filenameWithDay: string): Promise<void> {
+    const filenamesWithHours = this.findFilesByDay(filenameWithDay);
 
     const pendingPullRequestEvents = filenamesWithHours.map(
       async (filenameWithHour) => {
@@ -64,20 +123,15 @@ export class EventsService {
           filenameWithHour,
           eventType,
         );
-        const pendingSaveEvents = events.map((prEvent) =>
-          eventRepository.save(prEvent),
-        );
 
-        console.log(
-          `-- ${new Date().toISOString()} --filename = ${filenameWithHour} || --message = Archivo procesado`,
-        );
+        const success = !!events?.length;
 
-        await Promise.all(pendingSaveEvents);
+        this.writeLog(filenameWithHour, success);
+
+        this.saveDataInFile(filenameWithDay, events);
       },
     );
 
     await Promise.all(pendingPullRequestEvents);
-
-    return message;
   }
 }
