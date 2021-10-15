@@ -126,9 +126,11 @@ export class EventsService {
 
         const success = !!events?.length;
 
-        this.writeLog(filenameWithHour, success);
+        if (success) {
+          this.saveDataInFile(filenameWithDay, events);
+        }
 
-        this.saveDataInFile(filenameWithDay, events);
+        this.writeLog(filenameWithHour, success);
       },
     );
 

@@ -5,10 +5,7 @@
   "main": "src/index.ts",
   "scripts": {
     "build": "tsc --build",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start:prod": "node ./dist/index.js",
-    "start": "ts-node .",
-    "start:dev": "nodemon"
+    "start:prod": "node ./dist/index.js"
   },
   "keywords": [],
   "author": "Hector",
@@ -27,10 +24,8 @@
     "eslint": "^7.22.0",
     "eslint-config-prettier": "^8.1.0",
     "eslint-plugin-prettier": "^3.3.1",
-    "nodemon": "^2.0.12",
     "prettier": "^2.2.1",
     "ts-loader": "^8.0.18",
-    "ts-node": "^10.2.1",
     "tsconfig-paths": "^3.9.0",
     "typescript": "^4.4.3"
   }
