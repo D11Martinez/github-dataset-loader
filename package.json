@@ -5,7 +5,8 @@
   "main": "src/index.ts",
   "scripts": {
     "build": "tsc --build",
-    "start:prod": "node ./dist/index.js"
+    "start:prod": "node ./dist/index.js",
+    "start":"tsc --build && node ./dist/index.js"
   },
   "keywords": [],
   "author": "Hector",
