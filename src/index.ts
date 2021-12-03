@@ -4,7 +4,8 @@ import { Worker, workerData, isMainThread } from 'worker_threads';
 
 dotEnv.config();
 
-if (isMainThread) {
+//if (isMainThread) {
+if (false) {
   const filenames = process.env.FILENAMES.split(',').map((filename) =>
     filename.trim(),
   );
@@ -24,12 +25,15 @@ if (isMainThread) {
     console.error(errorMsg1);
   }
 } else {
-  const filename = workerData;
+  //const filename = workerData;
 
   async function main() {
+    const filenames = process.env.FILENAMES.split(',').map((filename) =>
+      filename.trim(),
+    );
     const eventService = new EventsService();
 
-    await eventService.loadEvents(filename);
+    await eventService.loadFiles(filenames);
   }
 
   main().catch((err) => console.error(err));
