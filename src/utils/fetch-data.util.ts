@@ -1,7 +1,10 @@
 import { Readable } from 'stream';
 import * as zlib from 'zlib';
-import { requestTimeout } from '../common/constants';
+import { eventType, requestTimeout } from '../common/constants';
 import axios, { AxiosRequestConfig } from 'axios';
+import { parser } from 'stream-json';
+import { chain } from 'stream-chain';
+import { streamValues } from 'stream-json/streamers/StreamValues';
 
 export async function decompressBuffer(
   rawData: Buffer,
@@ -61,4 +64,46 @@ export async function fetchData(
       }`,
     );
   }
+}
+
+export async function fetchStreamData(
+  url: string,
+  useGithubAuth: boolean,
+): Promise<any[]> {
+  const requestOptions: AxiosRequestConfig = {
+    responseType: 'stream',
+    timeout: requestTimeout,
+  };
+
+  if (useGithubAuth) {
+    const { USERNAME_GITHUB: username, TOKEN_GITHUB: password } = process.env;
+
+    requestOptions.auth = { username, password };
+  }
+
+  const response = await axios.get(url, requestOptions);
+
+  const dataStream: Readable = response.data;
+
+  const pipeline = chain([
+    dataStream,
+    zlib.createGunzip(),
+    parser({ jsonStreaming: true }),
+    streamValues(),
+  ]);
+
+  return await new Promise(async (resolve, reject) => {
+    let dataObjectsArr = [];
+
+    pipeline
+      .on('data', async ({ value: eventData }) => {
+        if (eventData.type === eventType) {
+          dataObjectsArr.push(eventData);
+        }
+      })
+      .on('end', () => {
+        resolve(dataObjectsArr);
+      })
+      .on('error', (fooErr) => console.error(fooErr.message));
+  });
 }

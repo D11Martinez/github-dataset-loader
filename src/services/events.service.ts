@@ -1,8 +1,7 @@
-import { eventType } from '../common/constants';
 import { appendFile } from 'fs';
 import { ICommit, IPullRequestEvent, IRawCommit, User } from '../interfaces';
 import Bottleneck from 'bottleneck';
-import { fetchData, decompressBuffer, filterEventsByType } from '../utils';
+import { fetchData, fetchStreamData } from '../utils';
 import { bootleneckConfig } from '../config';
 
 export class EventsService {
@@ -14,16 +13,10 @@ export class EventsService {
     this.wrappedAxios = limiter.wrap(fetchData);
   }
 
-  private async getFilteredEvents(filename: string, eventType: string) {
+  private async getFilteredEvents(filename: string): Promise<any[]> {
     const apiUrl = process.env.GITHUB_URL_API;
     const url = `${apiUrl}/${filename}.json.gz`;
-    const bufferData = await this.wrappedAxios(url, false);
-    const data = await decompressBuffer(bufferData, filename);
-
-    if (!data) return;
-
-    const filteredData = filterEventsByType(data, eventType);
-
+    const filteredData = await fetchStreamData(url, false);
     return filteredData;
   }
 
@@ -152,7 +145,7 @@ export class EventsService {
   }
 
   private async loadEvents(filename: string): Promise<void> {
-    const rawEvents = await this.getFilteredEvents(filename, eventType);
+    const rawEvents = await this.getFilteredEvents(filename);
 
     await this.attachExtraData(rawEvents, filename);
 
