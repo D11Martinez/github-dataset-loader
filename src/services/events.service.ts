@@ -1,110 +1,147 @@
-import Axios from 'axios';
-import { Readable } from 'stream';
-import * as zlib from 'zlib';
-import { eventType, requestTimeout } from '../common/constants';
+import { eventType } from '../common/constants';
 import { appendFile } from 'fs';
+import { ICommit, IPullRequestEvent, IRawCommit, User } from '../interfaces';
+import Bottleneck from 'bottleneck';
+import { fetchData, decompressBuffer, filterEventsByType } from '../utils';
+import { bootleneckConfig } from '../config';
 
 export class EventsService {
-  private findFilesByMonth(year: String, month: String): string[] {
-    const filenameWithDays = Array.from(Array(31).keys()).map((counter) => {
-      const day = counter + 1;
-      const cleanDay = day < 10 ? `0${day}` : `${day}`;
+  private wrappedAxios = null;
 
-      return `${year}-${month}-${cleanDay}`;
-    });
+  constructor() {
+    const limiter = new Bottleneck(bootleneckConfig);
 
-    const filenamesWithHours = filenameWithDays
-      .map((filenameWithDay) => this.findFilesByDay(filenameWithDay))
-      .reduce((acc, filenameWithHour) => acc.concat(filenameWithHour), []);
-
-    return filenamesWithHours;
-  }
-
-  private findFilesByDay(filenameWithDay: String) {
-    const filenamesWithHours = Array.from(Array(23).keys()).map((hour) => {
-      return `${filenameWithDay}-${hour}`;
-    });
-
-    return filenamesWithHours;
-  }
-
-  private filterEventsByType(rawData: string | null, eventType: string) {
-    if (!rawData) return [];
-
-    const filteredEvents = rawData
-      .split(/\r?\n/)
-      .slice(0, -2)
-      .map((eventString) => JSON.parse(eventString))
-      .filter((object) => object.type === eventType);
-
-    return filteredEvents;
-  }
-
-  private async fetchData(filename: string): Promise<string> {
-    const apiUrl = process.env.GITHUB_URL_API;
-
-    const url = `${apiUrl}/${filename}.json.gz`;
-
-    try {
-      const response = await Axios.get(url, {
-        responseType: 'stream',
-        timeout: requestTimeout,
-      });
-
-      const dataStream: Readable = response.data;
-
-      return await new Promise(async (resolve, reject) => {
-        let dataBufferArr = [];
-
-        dataStream.on('data', (chunk) => {
-          dataBufferArr.push(chunk);
-        });
-
-        dataStream.on('end', () => {
-          const rawData = Buffer.concat(dataBufferArr);
-
-          zlib.gunzip(rawData, function (err, buffer) {
-            if (err)
-              console.error(
-                `-- ${new Date().toISOString()} --filename = ${filename} || --message = Hubo un problema al cargar la data`,
-              );
-
-            resolve(buffer.toString());
-          });
-        });
-
-        dataStream.on('error', (fooErr) => console.error(fooErr.message));
-      });
-    } catch (error) {
-      console.error(error.message);
-    }
+    this.wrappedAxios = limiter.wrap(fetchData);
   }
 
   private async getFilteredEvents(filename: string, eventType: string) {
-    const data = await this.fetchData(filename);
+    const apiUrl = process.env.GITHUB_URL_API;
+    const url = `${apiUrl}/${filename}.json.gz`;
+    const bufferData = await this.wrappedAxios(url, false);
+    const data = await decompressBuffer(bufferData, filename);
 
     if (!data) return;
 
-    const filteredData = this.filterEventsByType(data, eventType);
+    const filteredData = filterEventsByType(data, eventType);
 
     return filteredData;
+  }
+
+  private async getCommits(commitsURL: string): Promise<ICommit[]> {
+    const rawCommitsListBuffer = await this.wrappedAxios(commitsURL, true);
+
+    if (!rawCommitsListBuffer) {
+      return [];
+    }
+
+    const rawCommitsList: IRawCommit[] = JSON.parse(
+      rawCommitsListBuffer.toString(),
+    );
+
+    const pendingCommits = rawCommitsList.map(
+      async (rawCommit): Promise<ICommit> => {
+        const { url } = rawCommit;
+
+        const commitBuffer = await this.wrappedAxios(url, true);
+
+        if (!commitBuffer) return;
+
+        return JSON.parse(commitBuffer.toString());
+      },
+    );
+
+    return Promise.all(pendingCommits);
+  }
+
+  private async getUser(userURL: string): Promise<User> {
+    if (!userURL) return;
+
+    const userBuffer = await this.wrappedAxios(userURL, true);
+
+    if (!userBuffer) return;
+
+    const user: User = JSON.parse(userBuffer.toString());
+
+    return user;
+  }
+
+  private async attachExtraData(
+    rawEvents: any[],
+    filename: string,
+  ): Promise<void> {
+    const pendingUpdatedEvents = rawEvents.map(
+      async (pullRequestEvent: IPullRequestEvent) => {
+        const {
+          actor: { url: actorURL },
+          payload: {
+            pull_request: {
+              commits_url: commitsURL,
+              user: { url: userURL },
+              head: {
+                user: { url: headUserURL },
+              },
+              base: {
+                user: { url: baseUserURL },
+              },
+            },
+          },
+        } = pullRequestEvent;
+
+        const orgURL = pullRequestEvent.org?.url;
+        const mergedByUserURL =
+          pullRequestEvent.payload.pull_request.merged_by?.url;
+
+        const commitsList = await this.getCommits(commitsURL);
+
+        const pendingActorUser = this.getUser(actorURL);
+        const pendingUser = this.getUser(userURL);
+        const pendingHeadUser = this.getUser(headUserURL);
+        const pendingBaseUser = this.getUser(baseUserURL);
+        const pendingOrgUser = this.getUser(orgURL);
+        const pendingMergedByUser = this.getUser(mergedByUserURL);
+
+        const [actorUser, user, headUser, baseUser, orgUser, mergedByUser] =
+          await Promise.all([
+            pendingActorUser,
+            pendingUser,
+            pendingHeadUser,
+            pendingBaseUser,
+            pendingOrgUser,
+            pendingMergedByUser,
+          ]);
+
+        if (actorUser) pullRequestEvent.actor = actorUser;
+        if (user) pullRequestEvent.payload.pull_request.user = user;
+        if (headUser)
+          pullRequestEvent.payload.pull_request.head.user = headUser;
+        if (baseUser)
+          pullRequestEvent.payload.pull_request.base.user = baseUser;
+        if (mergedByUser)
+          pullRequestEvent.payload.pull_request.merged_by = mergedByUser;
+        if (orgUser) pullRequestEvent.org = orgUser;
+
+        pullRequestEvent.payload.pull_request.commits_list = commitsList;
+
+        this.saveDataInFile(filename, [pullRequestEvent]);
+      },
+    );
+
+    await Promise.all(pendingUpdatedEvents);
   }
 
   private async writeLog(filename: string, success: boolean) {
     const message = success ? 'Archivo procesado' : 'Archivo no encontrado';
     const content = `{ "date": ${new Date().toISOString()}, "filename" : ${filename}, "message" : ${message} }`;
 
-    //appendFile(logsFilename, `${content}\n`, (err) => {});
-
     if (success) console.info(content);
     else console.error(content);
   }
 
-  private saveDataInFile(filename: string, data: any[]) {
+  private saveDataInFile(filename: string, data: any[]): void {
     const finalFilesDirectory = process.env.FINAL_FILES_DIR || './data';
     const filePath = `${finalFilesDirectory}/${filename}.json`;
 
-    const formatedDataWithNextLine = data.reduce((acc, item) => {
+    const formatedDataWithNextLine = data.reduce((acc, item): string => {
       const itemString = JSON.stringify(item);
       return `${acc}\n${itemString}`;
     }, '');
@@ -114,24 +151,21 @@ export class EventsService {
     appendFile(filePath, `${jsonData}\n`, 'utf8', (err) => {});
   }
 
-  async loadEvents(filenameWithDay: string): Promise<void> {
-    const filenamesWithHours = this.findFilesByDay(filenameWithDay);
+  private async loadEvents(filename: string): Promise<void> {
+    const rawEvents = await this.getFilteredEvents(filename, eventType);
 
-    const pendingPullRequestEvents = filenamesWithHours.map(
-      async (filenameWithHour) => {
-        const events = await this.getFilteredEvents(
-          filenameWithHour,
-          eventType,
-        );
+    await this.attachExtraData(rawEvents, filename);
 
-        const success = !!events?.length;
+    const success = !!rawEvents?.length;
 
-        this.writeLog(filenameWithHour, success);
+    this.writeLog(filename, success);
+  }
 
-        this.saveDataInFile(filenameWithDay, events);
-      },
+  async loadFiles(filenames: string[]) {
+    const pendingLoadedFiles = filenames.map((filename) =>
+      this.loadEvents(filename),
     );
 
-    await Promise.all(pendingPullRequestEvents);
+    await Promise.all(pendingLoadedFiles);
   }
 }
